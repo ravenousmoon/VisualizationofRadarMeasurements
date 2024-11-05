@@ -45,6 +45,286 @@
 
 <p><b>Інформація про цілі:</b> Текстова інформація про цілі, яка включає відстань, кут і потужність сигналу, відображається під графіком. Це дозволяє користувачам швидко переглянути дані про нещодавно виявлені цілі, які надходили протягом останніх 5 секунд.</p>
 
+<p>Створюємо веб-додатку для візуалізації даних радара:</p>
+
+``` html
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <title>Радарна Візуалізація</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.1/plotly.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            margin-top: 20px;
+        }
+
+        .controls label {
+            display: flex;
+            align-items: center;
+            margin-right: 10px;
+        }
+
+        .controls input {
+            width: 100px;
+            margin-left: 5px;
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        .controls button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #status {
+            padding: 10px;
+            font-weight: bold;
+            text-align: center;
+        }
+
+        .connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        .disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+
+        #radarPlot {
+            width: 100%;
+            height: 500px;
+        }
+
+        #targetInfo {
+            background-color: #fff;
+            border: 1px solid #ccc;
+            padding: 10px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="status" class="disconnected">Статус: Відключено</div>
+        
+        <div class="controls">
+            <label>
+                Кількість вимірювань за оберт:
+                <input type="number" id="measurementsPerRotation" value="360">
+            </label>
+            <label>
+                Швидкість обертання (RPM):
+                <input type="number" id="rotationSpeed" value="60">
+            </label>
+            <label>
+                Швидкість цілей (км/год):
+                <input type="number" id="targetSpeed" value="100">
+            </label>
+            <button onclick="updateConfig()">Оновити конфігурацію</button>
+        </div>
+
+        <div id="radarPlot"></div>
+        <div id="targetInfo"></div>
+    </div>
+
+    <script>
+        let socket;
+        let plotData = {
+            r: [],
+            theta: [],
+            mode: 'markers',
+            marker: {
+                color: [],
+                size: 10,
+                opacity: 1,
+                colorscale: 'Viridis'
+            },
+            type: 'scatterpolar'
+        };
+
+        // Ініціалізація графіка
+        const layout = {
+            polar: {
+                radialaxis: {
+                    title: 'Відстань (км)',
+                    range: [0, 200]
+                },
+                angularaxis: {
+                    direction: 'clockwise',
+                    period: 360
+                }
+            },
+            showlegend: false,
+            plot_bgcolor: '#f0f0f0',
+            paper_bgcolor: '#f0f0f0'
+        };
+
+        Plotly.newPlot('radarPlot', [plotData], layout);
+
+        function connectWebSocket() {
+            socket = new WebSocket('ws://localhost:4000');
+
+            socket.onopen = () => {
+                document.getElementById('status').className = 'connected';
+                document.getElementById('status').textContent = 'Статус: Підключено';
+                console.log('Підключено до WebSocket серверу');
+            };
+
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                processRadarData(data);
+            };
+
+            socket.onclose = () => {
+                document.getElementById('status').className = 'disconnected';
+                document.getElementById('status').textContent = 'Статус: Відключено';
+                console.log('З&#039єднання закрито');
+                setTimeout(connectWebSocket, 5000);
+            };
+
+            socket.onerror = (error) => {
+                console.error('Помилка WebSocket:', error);
+            };
+        }
+
+        function processRadarData(data) {
+            const speedOfLight = 299792.458; // км/с
+            const currentTime = new Date().getTime(); // Поточний час у мілісекундах
+            
+            // Обробка відповідей луна
+            data.echoResponses.forEach(echo => {
+                // Розрахунок відстані з використанням часу
+                const distance = (echo.time * speedOfLight) / 2;
+                
+                // Додавання нової точки
+                plotData.r.push(distance);
+                plotData.theta.push(data.scanAngle);
+                
+                // Розрахунок кольору та розміру точки
+                const color = getColor(echo.power);
+                plotData.marker.color.push(color);
+            });
+
+            // Видалення старих точок, якщо їх більше 5
+            if (plotData.r.length > 5) {
+                plotData.r.splice(0, plotData.r.length - 5);
+                plotData.theta.splice(0, plotData.theta.length - 5);
+                plotData.marker.color.splice(0, plotData.marker.color.length - 5);
+            }
+
+            // Оновлення графіку
+            Plotly.update('radarPlot', 
+                {
+                    r: [plotData.r],
+                    theta: [plotData.theta],
+                    'marker.color': [plotData.marker.color],
+                    'marker.size': [plotData.marker.size]
+                }
+            );
+
+            // Відображення інформації про цілі
+            updateTargetInfo(plotData.r, plotData.theta, plotData.marker.color, currentTime);
+        }
+
+        function getColor(power) {
+            // Розрахунок кольору точки в залежності від потужності
+            const r = Math.floor(255 * (1 - power));
+            const g = Math.floor(255 * power);
+            const b = 0;
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+
+        function updateTargetInfo(r, theta, color, time) {
+            let targetInfo = '';
+            const currentTime = new Date().getTime();
+
+            for (let i = 0; i < r.length; i++) {
+                const distance = r[i].toFixed(2);
+                const angle = theta[i].toFixed(2);
+                const targetColor = color[i];
+                const targetAge = currentTime - time; // Час у мілісекундах з моменту виявлення цілі
+
+                if (targetAge <= 5000) { // Відображаємо лише цілі, які не старші 5 секунд
+                    targetInfo += `
+                        <div style="background-color: ${targetColor}; padding: 5px; margin-bottom: 5px;">
+                            Ціль:
+                            - Відстань: ${distance} км
+                            - Кут: ${angle}°
+                        </div>
+                    `;
+                }
+            }
+
+            document.getElementById('targetInfo').innerHTML = targetInfo;
+        }
+
+        async function updateConfig() {
+            const config = {
+                measurementsPerRotation: parseInt(document.getElementById('measurementsPerRotation').value),
+                rotationSpeed: parseInt(document.getElementById('rotationSpeed').value),
+                targetSpeed: parseInt(document.getElementById('targetSpeed').value)
+            };
+
+            try {
+                const response = await fetch('http://localhost:4000/config', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                console.log('Конфігурація успішно оновлена');
+
+                // Додатково можна додати повідомлення про успішне оновлення
+                alert('Конфігурація успішно оновлена');
+            } catch (error) {
+                console.error('Помилка при оновленні конфігурації', error);
+                alert('Помилка при оновленні конфігурації:');
+            }
+        }
+
+        // Підключення під час завантаження сторінки
+        connectWebSocket();
+    </script>
+</body>
+</html>
+```
+
+<p>Результат:</p>
 
 
 
